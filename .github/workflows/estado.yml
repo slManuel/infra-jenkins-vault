@@ -1,0 +1,41 @@
+name: Consultar estado de infraestructura EKS
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  estado:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_PAGER: ""
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::022907376152:role/prueba-devops-github-actions-jenkins-vault
+          aws-region: us-east-1
+          allowed-account-ids: "022907376152"
+      - name: Consultar estados y salud sin modificar recursos
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          queries = [
+              ["eks", "describe-cluster", "--name", "prueba-devops-jenkins-vault",
+               "--query", "cluster.{status:status,version:version,health:health}"],
+              ["eks", "describe-nodegroup", "--cluster-name", "prueba-devops-jenkins-vault",
+               "--nodegroup-name", "jenkins", "--query", "nodegroup.{name:nodegroupName,status:status,health:health}"],
+              ["eks", "describe-nodegroup", "--cluster-name", "prueba-devops-jenkins-vault",
+               "--nodegroup-name", "vault", "--query", "nodegroup.{name:nodegroupName,status:status,health:health}"],
+              ["eks", "describe-addon", "--cluster-name", "prueba-devops-jenkins-vault",
+               "--addon-name", "aws-ebs-csi-driver", "--query", "addon.{name:addonName,status:status,health:health}"],
+          ]
+          for query in queries:
+              result = subprocess.run(["aws", *query, "--output", "json"], capture_output=True, text=True)
+              print("Consulta:", query[1])
+              print(result.stdout.strip() if result.returncode == 0 else result.stderr.strip())
+          PY
