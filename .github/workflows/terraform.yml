@@ -116,23 +116,22 @@ jobs:
           terraform init -input=false -lockfile=readonly
           terraform validate
       - name: Planificar y comprobar alcance
+        shell: bash
         run: |
           umask 077
+          set -o pipefail
+          set +e
+          terraform plan -no-color -input=false -lock-timeout=5m -out=infra.tfplan 2>&1 | tee plan.log
+          codes=("${PIPESTATUS[@]}")
+          set -e
+          echo "Terraform exit code: ${codes[0]}; tee exit code: ${codes[1]}"
+          if [ "${codes[0]}" -ne 0 ]; then exit "${codes[0]}"; fi
+          if [ "${codes[1]}" -ne 0 ]; then exit "${codes[1]}"; fi
           python3 - <<'PY'
           import json
           import os
-          import re
           import subprocess
           from pathlib import Path
-          result = subprocess.run(
-              ["terraform", "plan", "-input=false", "-lock-timeout=5m", "-out=infra.tfplan"],
-              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-          )
-          Path("plan.log").write_text(result.stdout)
-          if result.returncode:
-              for action in sorted(set(re.findall(r"not authorized to perform: ([A-Za-z0-9:]+)", result.stdout))):
-                  print("Permiso denegado: " + action)
-              raise SystemExit("Plan fallido; log conservado en artefacto privado.")
           plan = json.loads(subprocess.check_output(["terraform", "show", "-json", "infra.tfplan"], text=True))
           expected = set(json.loads(Path(".github/recursos-autorizados.json").read_text()))
           counts = {"create": 0, "no-op": 0}
@@ -167,25 +166,25 @@ jobs:
           head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           test "$head" = "$GITHUB_SHA"
       - name: Aplicar el mismo plan guardado
+        shell: bash
         run: |
           umask 077
+          set -o pipefail
+          set +e
+          terraform apply -no-color -input=false -lock-timeout=5m infra.tfplan 2>&1 | tee apply.log
+          codes=("${PIPESTATUS[@]}")
+          set -e
+          echo "Terraform exit code: ${codes[0]}; tee exit code: ${codes[1]}"
+          if [ "${codes[0]}" -ne 0 ]; then exit "${codes[0]}"; fi
+          if [ "${codes[1]}" -ne 0 ]; then exit "${codes[1]}"; fi
           python3 - <<'PY'
           import os
           import re
-          import subprocess
           from pathlib import Path
-          result = subprocess.run(
-              ["terraform", "apply", "-input=false", "-lock-timeout=5m", "infra.tfplan"],
-              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-          )
-          Path("apply.log").write_text(result.stdout)
-          for text in re.findall(r"Apply complete! Resources: [^\n]+", result.stdout):
-              print(text)
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+          content = Path("apply.log").read_text()
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              for text in re.findall(r"Apply complete! Resources: [^\n]+", content):
                   summary.write(text + "\n")
-          for action in sorted(set(re.findall(r"not authorized to perform: ([A-Za-z0-9:]+)", result.stdout))):
-              print("Permiso denegado: " + action)
-          raise SystemExit(result.returncode)
           PY
       - name: Verificar infraestructura desplegada
         run: |

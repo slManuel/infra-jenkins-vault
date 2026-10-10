@@ -46,3 +46,12 @@ terraform fmt -check -recursive; terraform init -backend=false -lockfile=readonl
 El primer apply run38026386864 creó16 recursos, incluido clúster, roles, plantillas y addons de red, pero falló por un ARN EBS V2 incorrecto y falta de GetRole sobre el rol vinculado de nodos. El bootstrap corrigió ambos permisos en run38027207876:0creaciones/2políticas actualizadas/0eliminaciones. ARN correcto: arn:aws:iam::aws:policy/AmazonEBSCSIDriverPolicyV2. La continuación usa el estado S3 existente; no ejecutar desde estado vacío ni recrear el clúster. El plan siguiente confirmó5creates/16no-op y creó la asociación EBS; los nodos volvieron a detenerse por GetRole. El diagnóstico directo38027564437 no ejecutó plan/apply. Bootstrap38027688224 añadió lectura del ARN exacto sin ruta para comprobar el rol aún ausente. La siguiente continuación debe conservar17recursos y crear4; el preflight diferencia NoSuchEntity de AccessDenied.
 
 [Referencia oficial EBS V2](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonEBSCSIDriverPolicyV2.html).
+
+
+## Logs de Terraform — 9 de octubre de 2026
+
+Los pasos de plan y apply muestran ahora el texto legible de Terraform en directo con `-no-color` y `tee`, y conservan `plan.log` y `apply.log` como artefactos privados de un día. Antes la redirección o captura completa ocultaba el progreso; algunos fallos solo mostraban exit 1. Bash captura `PIPESTATUS` inmediatamente: prevalece el código original de Terraform; si Terraform termina bien y tee falla, el paso también falla. Ensayos locales confirmaron stdout/stderr visibles y códigos 0 y 37 conservados.
+
+En Actions abrir el job deploy y el paso Planificar o Aplicar: aparecen refrescos, Creating/Still creating, errores del proveedor y código real. Las comprobaciones de alcance siguen leyendo el plan JSON en memoria sin imprimirlo. No se imprimen estados Terraform, credenciales ni tokens; se revisaron los recursos y outputs actuales, que contienen infraestructura e identificadores, sin valores secretos. Antes de incorporar recursos con secretos se debe revisar nuevamente la salida. Los respaldos de estado y planes binarios continúan en artefactos privados.
+
+El recorrido sigue siendo validar → planificar → comprobar alcance → aplicar el mismo plan guardado → verificar AWS. Esta mejora conserva OIDC, backend, triggers y mecanismo automático vigente. La publicación usa `[skip ci]` para evitar despliegues adicionales durante el apply activo; no cambia el comportamiento de las ejecuciones futuras.
