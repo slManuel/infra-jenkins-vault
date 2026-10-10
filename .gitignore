@@ -7,3 +7,8 @@
 crash.log
 *.log
 .review/
+
+.approved-plan/
+plan-metadata.json
+__pycache__/
+*.pyc

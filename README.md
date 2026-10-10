@@ -1,62 +1,90 @@
 # Infraestructura Jenkins y Vault
 
-Clúster EKS prueba-devops-jenkins-vault en us-east-1, Kubernetes 1.36 con API exclusivamente privada. Usa dos subredes privadas de infra-red-compartida. Autenticación API; no concede administración automática al creador. El usuario IAM manuel-dev recibe AmazonEKSClusterAdminPolicy mediante access entry.
+Este repositorio prepara la infraestructura AWS para alojar Jenkins y Vault: clúster EKS privado, grupos de nodos, roles y complementos de Kubernetes. Reutiliza las subredes de `infra-red-compartida`. La instalación y configuración de las herramientas se realiza con manifiestos propios, sin Helm, desde [despliegue-jenkins-vault](../despliegue-jenkins-vault/).
 
-## Responsabilidades
+## Organización
 
-- identidad_base: roles del clúster/nodos y políticas AWS. Outputs esperan a sus asociaciones IAM.
-- cluster: EKS y acceso administrador.
-- red_pods: rol CNI, asociación Pod Identity y addons VPC CNI/agente.
-- nodos: plantillas y grupos Jenkins/Vault explícitos, sin bucles.
-- almacenamiento: rol, asociación Pod Identity y addon EBS CSI.
+- **`modules/iam_roles/`**: roles del clúster y de los nodos, con sus políticas AWS.
+- **`modules/cluster/`**: clúster EKS y acceso del administrador.
+- **`modules/red_pods/`**: red de los pods, VPC CNI y Pod Identity Agent.
+- **`modules/nodos/`**: plantillas y grupos de nodos separados para Jenkins y Vault.
+- **`modules/almacenamiento/`**: identidad y add-on EBS CSI para gestionar volúmenes.
+- **`.github/workflows/`**: validación, plan, aplicación manual y consultas; **`scripts/`** comprueba la aprobación del plan.
 
-main.tf conecta cinco módulos; moved.tf conserva las direcciones de raíz y module.eks, incluidas las antiguas instancias herramientas["jenkins"] y herramientas["vault"]. Hay 21 recursos finales. No hay locals/for/for_each. Backend/provider quedan en raíz; no se crean outputs públicos nuevos.
+En la raíz, **`main.tf`** conecta los cinco módulos y **`data.tf`** consulta la red existente. **`moved.tf`** conserva referencias al reorganizar recursos. **`backend.tf`** guarda el estado en el bucket del bootstrap bajo `jenkins-vault/terraform.tfstate`, con cifrado y bloqueo.
 
-Jenkins: un t3.large en us-east-1a, disco gp3 cifrado de 40 GiB. Vault: un t3.medium en us-east-1b, disco gp3 cifrado de 20 GiB. Capacidad ON_DEMAND, min/max/desired 1 por grupo. IMDSv2 obligatorio, hop limit 1 y créditos CPU standard. No IP públicas ni SSH configurado.
+## Estado comprobado — 10 de octubre de 2026
 
-## Versiones verificadas
+**Despliegue parcial:** el control plane EKS está activo con Kubernetes 1.36 y API privada. Los grupos `jenkins` y `vault` están en `CREATE_FAILED`; AWS informa un fallo de lanzamiento EC2 por cuota Fleet. CNI y Pod Identity Agent figuran activos; EBS CSI no aparece instalado. No se acredita Jenkins/Vault funcionando en AWS. La consola tampoco permite consultar objetos Kubernetes con la identidad actual.
 
-Catálogo AWS consultado en us-east-1 por OIDC, run 38026057070: Kubernetes 1.36, Pod Identity Agent v1.3.10-eksbuild.3, VPC CNI v1.22.4-eksbuild.3, EBS CSI v1.66.0-eksbuild.1. AMI AL2023_x86_64_STANDARD release 1.36.4-20261003, imagen ami-0168ea3fb7ca2dbbe de AWS. Valores fijados en los recursos; el workflow vuelve a comprobar disponibilidad/compatibilidad antes del plan. Registro técnico en .github/catalogo-verificado.json. Terraform 1.15.9, AWS 6.68.0 fijado con lock.
+El código prevé un nodo `t3.large` para Jenkins y uno `t3.medium` para Vault, con discos gp3 cifrados de 40 y 20 GiB. EKS, EC2 y volúmenes generan costos mientras existan. La reanudación permanece pendiente de resolver el bloqueo AWS y revisar el plan; debe conservarse el estado existente.
 
-EKS inicia CNI/kube-proxy/CoreDNS self-managed por defecto. El recurso vpc-cni adopta el CNI con resolve_conflicts_on_create=OVERWRITE. Pod Identity usa roles dedicados CNI/EBS, confianza limitada al ARN del clúster, namespace y service account, y session tags habilitadas. El rol de nodos incluye AmazonEKSWorkerNodePolicy y AmazonEC2ContainerRegistryPullOnly; el CNI tiene política separada.
+## Workflows de GitHub Actions
 
-## Orden de arranque
+El código local declara **4 workflows, 5 jobs y 29 pasos**; no define stages. La separación entre plan y apply manual todavía está pendiente de publicación: las capturas de Actions corresponden al workflow anterior.
 
-Roles base/políticas → clúster → asociación CNI → nodos. El output cluster_name_for_nodes espera solo la asociación, no la salud de los addons; así el agente y CNI pueden arrancar con los nodos sin espera circular. No añadir depends_on=[module.red_pods] al módulo nodos. Los addons de red se gestionan en paralelo; almacenamiento espera ambos grupos y el módulo de red completo. Los nodos privados salen a APIs AWS/ECR mediante NAT de su AZ; S3 usa endpoint gateway.
+- **`terraform.yml`**: push a `main`, pull request hacia `main` o ejecución manual; `checks` (6 pasos) → `plan` (9). El plan espera checks correctos, exige `AWS_DEPLOY_ENABLED=true` y `main`, y se omite en PR. Nunca aplica.
+- **`terraform-apply.yml`**: solo ejecución manual; `apply` (9 pasos), con ID del run, commit y SHA-256 del plan revisado. Exige la misma variable y `main`; descarga un plan previo, sin dependencia `needs` entre workflows.
+- **`catalogo.yml`**: ejecución manual de consulta; `catalogo` (3 pasos).
+- **`estado.yml`**: ejecución manual de diagnóstico; `estado` (2 pasos).
 
-## Despliegue y estado
+Plan y apply comparten un grupo de concurrencia, sin cancelar la ejecución anterior. La variable de despliegue está ausente en GitHub: ambos quedan bloqueados. Los artefactos son privados y pueden contener datos sensibles.
 
-Backend S3 bucket tfstate-prueba-cuscatlan-oct2026-jose-manuel-solis, key jenkins-vault/terraform.tfstate, región us-east-1, cifrado y use_lockfile=true. Consume outputs private_subnet_ids y private_subnet_ids_by_az del estado red-compartida/terraform.tfstate. No versionar estado ni credenciales.
+| Job `checks`: paso | Función |
+|---|---|
+| 1. Checkout | Obtiene el código. |
+| 2. Setup Terraform | Instala Terraform 1.15.9. |
+| 3. Comprobar formato | Revisa el formato de raíz y módulos sin modificar archivos. |
+| 4. Inicializar sin backend | Prepara módulos y proveedores sin modificar el lockfile. |
+| 5. Validar | Valida la configuración Terraform. |
+| 6. Probar aprobación | Ejecuta las pruebas del control de planes aprobados. |
 
-Workflow catalogo.yml: consulta de solo lectura por workflow_dispatch. terraform.yml: push/main o workflow_dispatch realiza checks, OIDC con prueba-devops-github-actions-jenkins-vault, preflight de catálogo/subredes, init/validate/plan y apply automático del mismo plan. PR solo checks sin AWS. Acciones fijadas por SHA. La compuerta permite únicamente create/no-op de las 21 direcciones enumeradas en .github/recursos-autorizados.json; bloquea actualizaciones/eliminaciones/reemplazos y debe revisarse antes de cambios futuros.
+| Job `plan`: paso | Función |
+|---|---|
+| 1. Checkout | Obtiene el código. |
+| 2. Setup Terraform | Instala Terraform 1.15.9. |
+| 3. Autenticación OIDC | Asume el rol AWS del proyecto con credenciales temporales. |
+| 4. Comprobar rol vinculado | Comprueba su lectura y distingue un rol ausente de un acceso denegado. |
+| 5. Comprobar catálogo y subredes | Verifica versiones de add-ons, AMI y subredes privadas contra el estado de red. |
+| 6. Inicializar y validar | Conecta con el backend S3 y valida sin modificar el lockfile. |
+| 7. Planificar y comprobar alcance | Guarda plan/log y solo admite los recursos autorizados con acciones create/no-op. |
+| 8. Registrar plan | Registra ID del run, commit y SHA-256 del plan. |
+| 9. Guardar plan privado | Incluso ante fallo, intenta conservar plan, metadatos y log disponibles durante 1 día. |
 
-Después del apply, verifica con API AWS clústerACTIVE/privado, ambos grupos ACTIVE con su instancia/escala/release y tres addons ACTIVE sin issues. No sustituye una comprobación de pods dentro de Kubernetes: el runner GitHub no tiene acceso a la API privada y no se abre ese acceso. Plan/diagnósticos privados se conservan 1 día; estado remoto en S3 versionado. Si falla guardar estado, recuperar errored.tfstate del artefacto privado antes de continuar.
+| Job `apply`: paso | Función |
+|---|---|
+| 1. Checkout | Obtiene el código. |
+| 2. Setup Terraform | Instala Terraform 1.15.9. |
+| 3. Verificar aprobación y descargar | Comprueba origen, ejecución exitosa, commit vigente, intento, metadatos y hash del plan elegido. |
+| 4. Autenticación OIDC | Asume el rol AWS del proyecto con credenciales temporales. |
+| 5. Inicializar y validar | Conecta con el backend existente y valida sin modificar el lockfile. |
+| 6. Comprobar main | Verifica de nuevo que main apunta al commit de la ejecución. |
+| 7. Aplicar plan guardado | Aplica el archivo aprobado sin generar otro plan y registra el resultado. |
+| 8. Verificar infraestructura | Comprueba por API AWS clúster privado, grupos de nodos y add-ons activos; no valida pods. |
+| 9. Guardar diagnóstico | Incluso ante fallo, intenta conservar apply.log y errored.tfstate disponibles durante 1 día. |
 
-Este repositorio despliega infraestructura y addons operativos. No instala Jenkins, Vault, Helm ni aplicaciones. EKS, dos instancias y volúmenes generan costos; los NAT pertenecen al repositorio de red. Los permisos actuales no permiten destruir infraestructura; retirada requiere revisión y autorización separadas.
+| Job `catalogo`: paso | Función |
+|---|---|
+| 1. Autenticación OIDC | Obtiene credenciales temporales AWS. |
+| 2. Consultar compatibilidad | Consulta versiones compatibles de add-ons y AMI AL2023 para Kubernetes 1.36. |
+| 3. Guardar catálogo | Conserva catalogo.json como artefacto durante 1 día. |
 
-## Validación
+| Job `estado`: paso | Función |
+|---|---|
+| 1. Autenticación OIDC | Obtiene credenciales temporales AWS. |
+| 2. Consultar estado y salud | Consulta clúster, grupos Jenkins/Vault y EBS CSI sin modificar recursos; éxito del job no implica infraestructura sana. |
 
-terraform fmt -check -recursive; terraform init -backend=false -lockfile=readonly; terraform validate. Validación offline: 0 errores/0 avisos. Catálogo AWS verificado; plan/apply reales se consultan en Actions.
+## Evidencias
 
-[Versiones EKS](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html) · [Compatibilidad addons](https://docs.aws.amazon.com/eks/latest/userguide/addon-compat.html) · [Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-agent-setup.html) · [Plantillas de nodos](https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html) · [Refactorización Terraform](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring).
+Capturas reales en [imágenes/](imágenes/); muestran el resultado parcial, no un despliegue completo exitoso.
 
-
-## Recuperación de despliegue parcial
-
-El primer apply run38026386864 creó16 recursos, incluido clúster, roles, plantillas y addons de red, pero falló por un ARN EBS V2 incorrecto y falta de GetRole sobre el rol vinculado de nodos. El bootstrap corrigió ambos permisos en run38027207876:0creaciones/2políticas actualizadas/0eliminaciones. ARN correcto: arn:aws:iam::aws:policy/AmazonEBSCSIDriverPolicyV2. La continuación usa el estado S3 existente; no ejecutar desde estado vacío ni recrear el clúster. El plan siguiente confirmó5creates/16no-op y creó la asociación EBS; los nodos volvieron a detenerse por GetRole. El diagnóstico directo38027564437 no ejecutó plan/apply. Bootstrap38027688224 añadió lectura del ARN exacto sin ruta para comprobar el rol aún ausente. La siguiente continuación debe conservar17recursos y crear4; el preflight diferencia NoSuchEntity de AccessDenied.
-
-[Referencia oficial EBS V2](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonEBSCSIDriverPolicyV2.html).
-
-
-## Logs de Terraform — 9 de octubre de 2026
-
-Los pasos de plan y apply muestran ahora el texto legible de Terraform en directo con `-no-color` y `tee`, y conservan `plan.log` y `apply.log` como artefactos privados de un día. Antes la redirección o captura completa ocultaba el progreso; algunos fallos solo mostraban exit 1. Bash captura `PIPESTATUS` inmediatamente: prevalece el código original de Terraform; si Terraform termina bien y tee falla, el paso también falla. Ensayos locales confirmaron stdout/stderr visibles y códigos 0 y 37 conservados.
-
-En Actions abrir el job deploy y el paso Planificar o Aplicar: aparecen refrescos, Creating/Still creating, errores del proveedor y código real. Las comprobaciones de alcance siguen leyendo el plan JSON en memoria sin imprimirlo. No se imprimen estados Terraform, credenciales ni tokens; se revisaron los recursos y outputs actuales, que contienen infraestructura e identificadores, sin valores secretos. Antes de incorporar recursos con secretos se debe revisar nuevamente la salida. Los respaldos de estado y planes binarios continúan en artefactos privados.
-
-El recorrido sigue siendo validar → planificar → comprobar alcance → aplicar el mismo plan guardado → verificar AWS. Esta mejora conserva OIDC, backend, triggers y mecanismo automático vigente. La publicación usa `[skip ci]` para evitar despliegues adicionales durante el apply activo; no cambia el comportamiento de las ejecuciones futuras.
-
-
-## Pausa de despliegue AWS — 10/10/2026
-
-El job deploy exige `vars.AWS_DEPLOY_ENABLED == 'true'`. Variable actualmente ausente: pushes ejecutan checks, sin asumir rol ni aplicar. Mantener así hasta resolver caso AWS179161319400637 y autorizar reanudación. No es aprobación manual permanente; al habilitarla conserva el flujo automático anterior y aplica el mismo plan validado. Nodegroups no consiguieron lanzar instancias. Jenkins/Vault se instalan con manifiestos propios desde [despliegue-jenkins-vault](https://github.com/slManuel/despliegue-jenkins-vault); sin Helm.
+| Captura | Qué muestra |
+|---|---|
+| [01 — Plan y apply](imágenes/01-github-plan-verificado-apply-fallido.jpg) | Plan de 4 creaciones pendientes y ejecución 38027872859 fallida. |
+| [02 — Paso apply](imágenes/02-github-apply-exit-1-verificacion-omitida.jpg) | Exit code 1 y verificación posterior omitida. |
+| [03 — Control plane](imágenes/03-aws-control-plane-activo-kubernetes-1-36.jpg) | Clúster activo con Kubernetes 1.36. |
+| [04 — Checks](imágenes/04-github-checks-correctos-despliegue-omitido.jpg) | Ejecución 38032430334 correcta con despliegue omitido. |
+| [05 — Grupos de nodos](imágenes/05-aws-grupos-jenkins-vault-create-failed.jpg) | Jenkins y Vault en Create failed. |
+| [06 — Causa del fallo](imágenes/06-aws-jenkins-fallo-cuota-fleet.jpg) | Error de lanzamiento de EC2 por cuota Fleet en Jenkins. |
+| [07 — Add-ons](imágenes/07-aws-dos-addons-activos-ebs-ausente.jpg) | CNI y Pod Identity Agent activos; solo dos add-ons instalados. |
+| [08 — Red](imágenes/08-aws-api-privada-red-compartida.jpg) | API privada y subredes de la red compartida. |

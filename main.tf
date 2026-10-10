@@ -1,12 +1,12 @@
-module "identidad_base" {
-  source    = "./modules/identidad_base"
+module "iam_roles" {
+  source    = "./modules/iam_roles"
   providers = { aws = aws }
 }
 
 module "cluster" {
   source                      = "./modules/cluster"
   providers                   = { aws = aws }
-  cluster_role_arn            = module.identidad_base.cluster_role_arn
+  cluster_role_arn            = module.iam_roles.cluster_role_arn
   private_subnet_ids          = data.terraform_remote_state.red_compartida.outputs.private_subnet_ids
   administrator_principal_arn = data.aws_iam_user.administrador_cluster.arn
 }
@@ -23,7 +23,7 @@ module "nodos" {
   providers                = { aws = aws }
   cluster_name             = module.red_pods.cluster_name_for_nodes
   kubernetes_version       = module.cluster.kubernetes_version
-  node_role_arn            = module.identidad_base.node_role_arn
+  node_role_arn            = module.iam_roles.node_role_arn
   private_subnet_ids_by_az = data.terraform_remote_state.red_compartida.outputs.private_subnet_ids_by_az
 }
 

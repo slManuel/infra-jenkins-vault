@@ -209,3 +209,9 @@ moved {
   from = module.eks.aws_eks_addon.ebs_csi
   to   = module.almacenamiento.aws_eks_addon.ebs_csi
 }
+
+# Conserva recursos del módulo IAM anterior: cambio de dirección, no recreación.
+moved {
+  from = module.identidad_base
+  to   = module.iam_roles
+}

@@ -1,4 +1,4 @@
-name: Planificar y aplicar infraestructura
+name: Validar y guardar plan de infraestructura
 
 on:
   push:
@@ -35,8 +35,9 @@ jobs:
       - run: terraform fmt -check -recursive -diff
       - run: terraform init -backend=false -input=false -lockfile=readonly
       - run: terraform validate
+      - run: python3 scripts/test_approved_plan.py
 
-  deploy:
+  plan:
     needs: checks
     if: vars.AWS_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -151,6 +152,8 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write(text + "\n")
           PY
+      - name: Registrar commit y SHA-256 del plan
+        run: python3 scripts/approved_plan.py record
       - name: Guardar plan privado para revisión
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -158,67 +161,7 @@ jobs:
           name: terraform-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             infra.tfplan
+            plan-metadata.json
             plan.log
-          if-no-files-found: ignore
-          retention-days: 1
-      - name: Comprobar main antes de aplicar
-        run: |
-          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          test "$head" = "$GITHUB_SHA"
-      - name: Aplicar el mismo plan guardado
-        shell: bash
-        run: |
-          umask 077
-          set -o pipefail
-          set +e
-          terraform apply -no-color -input=false -lock-timeout=5m infra.tfplan 2>&1 | tee apply.log
-          codes=("${PIPESTATUS[@]}")
-          set -e
-          echo "Terraform exit code: ${codes[0]}; tee exit code: ${codes[1]}"
-          if [ "${codes[0]}" -ne 0 ]; then exit "${codes[0]}"; fi
-          if [ "${codes[1]}" -ne 0 ]; then exit "${codes[1]}"; fi
-          python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-          content = Path("apply.log").read_text()
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              for text in re.findall(r"Apply complete! Resources: [^\n]+", content):
-                  summary.write(text + "\n")
-          PY
-      - name: Verificar infraestructura desplegada
-        run: |
-          python3 - <<'PY'
-          import json
-          import subprocess
-          def aws(*args):
-              return json.loads(subprocess.check_output(["aws", *args, "--output", "json"], text=True))
-          name = "prueba-devops-jenkins-vault"
-          cluster = aws("eks", "describe-cluster", "--name", name)["cluster"]
-          assert cluster["status"] == "ACTIVE"
-          assert cluster["version"] == "1.36"
-          assert cluster["resourcesVpcConfig"]["endpointPrivateAccess"]
-          assert not cluster["resourcesVpcConfig"]["endpointPublicAccess"]
-          print("Clúster ACTIVE, Kubernetes1.36, API solo privada.")
-          for node_name, instance in [("jenkins", "t3.large"), ("vault", "t3.medium")]:
-              node = aws("eks", "describe-nodegroup", "--cluster-name", name, "--nodegroup-name", node_name)["nodegroup"]
-              assert node["status"] == "ACTIVE" and not node.get("health", {}).get("issues")
-              assert node["instanceTypes"] == [instance]
-              assert node["scalingConfig"] == {"minSize": 1, "maxSize": 1, "desiredSize": 1}
-              assert node["releaseVersion"] == "1.36.4-20261003"
-              print(node_name + ": ACTIVE, " + instance + ", un nodo, AMI fijada.")
-          for addon_name in ["eks-pod-identity-agent", "vpc-cni", "aws-ebs-csi-driver"]:
-              addon = aws("eks", "describe-addon", "--cluster-name", name, "--addon-name", addon_name)["addon"]
-              assert addon["status"] == "ACTIVE" and not addon.get("health", {}).get("issues")
-              print(addon_name + ": ACTIVE, " + addon["addonVersion"])
-          PY
-      - name: Guardar diagnóstico privado de apply
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: terraform-diagnostico-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            apply.log
-            errored.tfstate
           if-no-files-found: ignore
           retention-days: 1
