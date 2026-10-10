@@ -39,3 +39,10 @@ Este repositorio despliega infraestructura y addons operativos. No instala Jenki
 terraform fmt -check -recursive; terraform init -backend=false -lockfile=readonly; terraform validate. Validación offline: 0 errores/0 avisos. Catálogo AWS verificado; plan/apply reales se consultan en Actions.
 
 [Versiones EKS](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html) · [Compatibilidad addons](https://docs.aws.amazon.com/eks/latest/userguide/addon-compat.html) · [Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-id-agent-setup.html) · [Plantillas de nodos](https://docs.aws.amazon.com/eks/latest/userguide/launch-templates.html) · [Refactorización Terraform](https://developer.hashicorp.com/terraform/language/modules/develop/refactoring).
+
+
+## Recuperación de despliegue parcial
+
+El primer apply run38026386864 creó16 recursos, incluido clúster, roles, plantillas y addons de red, pero falló por un ARN EBS V2 incorrecto y falta de GetRole sobre el rol vinculado de nodos. El bootstrap corrigió ambos permisos en run38027207876:0creaciones/2políticas actualizadas/0eliminaciones. ARN correcto: arn:aws:iam::aws:policy/AmazonEBSCSIDriverPolicyV2. La continuación usa el estado S3 existente; no ejecutar desde estado vacío ni recrear el clúster. Plan esperado:5creates y16no-op, pendiente comprobarlo en el nuevo run.
+
+[Referencia oficial EBS V2](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonEBSCSIDriverPolicyV2.html).
