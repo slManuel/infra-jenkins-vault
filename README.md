@@ -21,7 +21,7 @@ El código prevé un nodo `t3.large` para Jenkins y uno `t3.medium` para Vault, 
 
 ## Workflows de GitHub Actions
 
-El código local declara **4 workflows, 5 jobs y 29 pasos**; no define stages. La separación entre plan y apply manual todavía está pendiente de publicación: las capturas de Actions corresponden al workflow anterior.
+El código publicado declara **4 workflows, 5 jobs y 29 pasos**; no define stages. Plan y apply manual ya están separados; las capturas históricas de Actions corresponden al workflow anterior. El gate AWS permanece deshabilitado.
 
 - **`terraform.yml`**: push a `main`, pull request hacia `main` o ejecución manual; `checks` (6 pasos) → `plan` (9). El plan espera checks correctos, exige `AWS_DEPLOY_ENABLED=true` y `main`, y se omite en PR. Nunca aplica.
 - **`terraform-apply.yml`**: solo ejecución manual; `apply` (9 pasos), con ID del run, commit y SHA-256 del plan revisado. Exige la misma variable y `main`; descarga un plan previo, sin dependencia `needs` entre workflows.
