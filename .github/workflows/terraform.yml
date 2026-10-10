@@ -58,6 +58,19 @@ jobs:
           aws-region: us-east-1
           allowed-account-ids: "022907376152"
           role-session-name: herramientas-${{ github.run_id }}
+      - name: Diagnosticar lectura del rol vinculado sin aplicar
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          result = subprocess.run(
+              ["aws", "iam", "get-role", "--role-name", "AWSServiceRoleForAmazonEKSNodegroup",
+               "--query", "Role.Arn", "--output", "json"],
+              capture_output=True, text=True
+          )
+          print("GetRole exit:", result.returncode)
+          print(result.stdout.strip() or result.stderr.strip())
+          raise SystemExit("Diagnóstico terminado: este commit no ejecuta plan ni apply.")
+          PY
       - name: Comprobar catálogo fijado y subredes
         run: |
           umask 077
