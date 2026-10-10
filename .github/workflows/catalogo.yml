@@ -1,0 +1,63 @@
+name: Consultar catálogo EKS y AMI
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  catalogo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_PAGER: ""
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::022907376152:role/prueba-devops-github-actions-jenkins-vault
+          aws-region: us-east-1
+          allowed-account-ids: "022907376152"
+      - name: Consultar compatibilidad real
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+          def aws(*args):
+              return json.loads(subprocess.check_output(["aws", *args, "--output", "json"], text=True))
+          def version_key(text):
+              return tuple(int(x) for x in re.findall(r"\d+", text))
+          result = {"region": "us-east-1", "kubernetes": "1.36", "addons": {}}
+          for name in ["eks-pod-identity-agent", "vpc-cni", "aws-ebs-csi-driver"]:
+              data = aws("eks", "describe-addon-versions", "--kubernetes-version", "1.36", "--addon-name", name)
+              versions = [v for a in data["addons"] for v in a["addonVersions"]
+                          if "amd64" in v["architecture"] and "ec2" in v.get("computeTypes", ["ec2"])]
+              if not versions:
+                  raise SystemExit("Sin addon compatible: " + name)
+              defaults = [v for v in versions if any(c.get("defaultVersion") and c["clusterVersion"] == "1.36"
+                                                   for c in v["compatibilities"])]
+              selected = max(defaults or versions, key=lambda v: version_key(v["addonVersion"]))
+              result["addons"][name] = selected["addonVersion"]
+          images = aws("ec2", "describe-images", "--owners", "amazon", "--filters",
+                       "Name=name,Values=amazon-eks-node-al2023-x86_64-standard-1.36-v*",
+                       "Name=state,Values=available", "Name=architecture,Values=x86_64")["Images"]
+          if not images:
+              raise SystemExit("Sin AMI AL2023 compatible disponible para 1.36.")
+          image = max(images, key=lambda x: x["CreationDate"])
+          result["ami"] = {k: image.get(k) for k in ["ImageId", "Name", "Description", "CreationDate", "OwnerId"]}
+          patch = re.search(r"k8s:\s*(1\.36\.\d+)", image.get("Description", ""))
+          date = re.search(r"-v(\d{8})$", image["Name"])
+          if patch and date:
+              result["release_version"] = patch[1] + "-" + date[1]
+          Path("catalogo.json").write_text(json.dumps(result, indent=2) + "\n")
+          print(json.dumps(result, indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: catalogo-eks-${{ github.run_id }}
+          path: catalogo.json
+          if-no-files-found: error
+          retention-days: 1
