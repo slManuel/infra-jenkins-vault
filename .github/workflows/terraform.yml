@@ -58,7 +58,7 @@ jobs:
           aws-region: us-east-1
           allowed-account-ids: "022907376152"
           role-session-name: herramientas-${{ github.run_id }}
-      - name: Diagnosticar lectura del rol vinculado sin aplicar
+      - name: Comprobar lectura del rol vinculado de nodos
         run: |
           python3 - <<'PY'
           import subprocess
@@ -67,9 +67,12 @@ jobs:
                "--query", "Role.Arn", "--output", "json"],
               capture_output=True, text=True
           )
-          print("GetRole exit:", result.returncode)
-          print(result.stdout.strip() or result.stderr.strip())
-          raise SystemExit("Diagnóstico terminado: este commit no ejecuta plan ni apply.")
+          if result.returncode and "NoSuchEntity" not in result.stderr:
+              raise SystemExit(result.stderr.strip())
+          if result.returncode:
+              print("Rol vinculado aún ausente; EKS puede crearlo con el permiso existente.")
+          else:
+              print("Rol vinculado accesible:", result.stdout.strip())
           PY
       - name: Comprobar catálogo fijado y subredes
         run: |
