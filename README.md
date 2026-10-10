@@ -55,3 +55,8 @@ Los pasos de plan y apply muestran ahora el texto legible de Terraform en direct
 En Actions abrir el job deploy y el paso Planificar o Aplicar: aparecen refrescos, Creating/Still creating, errores del proveedor y código real. Las comprobaciones de alcance siguen leyendo el plan JSON en memoria sin imprimirlo. No se imprimen estados Terraform, credenciales ni tokens; se revisaron los recursos y outputs actuales, que contienen infraestructura e identificadores, sin valores secretos. Antes de incorporar recursos con secretos se debe revisar nuevamente la salida. Los respaldos de estado y planes binarios continúan en artefactos privados.
 
 El recorrido sigue siendo validar → planificar → comprobar alcance → aplicar el mismo plan guardado → verificar AWS. Esta mejora conserva OIDC, backend, triggers y mecanismo automático vigente. La publicación usa `[skip ci]` para evitar despliegues adicionales durante el apply activo; no cambia el comportamiento de las ejecuciones futuras.
+
+
+## Pausa de despliegue AWS — 10/10/2026
+
+El job deploy exige `vars.AWS_DEPLOY_ENABLED == 'true'`. Variable actualmente ausente: pushes ejecutan checks, sin asumir rol ni aplicar. Mantener así hasta resolver caso AWS179161319400637 y autorizar reanudación. No es aprobación manual permanente; al habilitarla conserva el flujo automático anterior y aplica el mismo plan validado. Nodegroups no consiguieron lanzar instancias. Jenkins/Vault se instalan con manifiestos propios desde [despliegue-jenkins-vault](https://github.com/slManuel/despliegue-jenkins-vault); sin Helm.
